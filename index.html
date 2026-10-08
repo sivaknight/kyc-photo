@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jewelry Photo Mailer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JewelPhoto">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2b1b3d">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+:root{--bg:#2b1b3d;--panel:#3a2650;--ink:#f6f1fa;--mute:#b9a8cc;--gold:#e9c46a;--ok:#8fd9a8;--bad:#ff9b9b}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"SF Pro Text",system-ui,sans-serif}
+body{min-height:100vh;padding:calc(env(safe-area-inset-top) + 20px) 18px calc(env(safe-area-inset-bottom) + 28px);max-width:520px;margin:0 auto}
+h1{font-size:22px;margin:0 0 4px;font-weight:650;letter-spacing:.2px}
+.sub{color:var(--mute);font-size:14px;margin:0 0 20px}
+.btn{display:block;width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-weight:600;font-family:inherit}
+.primary{background:var(--gold);color:#2b1b3d}
+.ghost{background:var(--panel);color:var(--ink)}
+.btn:disabled{opacity:.4}
+.btn:focus-visible,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.stack>*+*{margin-top:12px}
+input[type=text],input[type=email]{width:100%;padding:14px;border-radius:12px;border:1px solid #5a4377;background:var(--panel);color:var(--ink);font-size:16px;font-family:inherit}
+label{font-size:13px;color:var(--mute);display:block;margin-bottom:6px}
+#preview{width:100%;border-radius:14px;display:none;background:#000;max-height:46vh;object-fit:contain}
+#stat{font-size:14px;color:var(--mute);min-height:20px}
+#stat.ok{color:var(--ok)}#stat.bad{color:var(--bad)}
+details{margin-top:22px;color:var(--mute);font-size:14px}
+summary{padding:6px 0}
+#hint{font-size:13px;color:var(--mute);line-height:1.45}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<h1>Jewelry photo mailer</h1>
+<p class="sub">Shoot, compress under 100 KB, send to your office mail.</p>
+
+<div class="stack">
+  <input id="cam" type="file" accept="image/*" capture="environment">
+  <button class="btn primary" id="shoot">Take photo</button>
+  <img id="preview" alt="Compressed photo preview">
+  <div id="stat"></div>
+  <div>
+    <label for="tag">Item code or note (used in subject and file name)</label>
+    <input id="tag" type="text" placeholder="e.g. NK-204 gold necklace" autocomplete="off">
+  </div>
+  <button class="btn ghost" id="send" disabled>Send to office mail</button>
+  <div id="hint">Sending opens the iPhone share sheet. Choose Gmail, and the office address is already copied: paste it in the To field.</div>
+</div>
+
+<details id="settings">
+  <summary>Settings</summary>
+  <div class="stack" style="margin-top:8px">
+    <div>
+      <label for="to">Office email address</label>
+      <input id="to" type="email" inputmode="email" autocapitalize="off" autocomplete="off" placeholder="name@yourorg.com">
+    </div>
+    <div>
+      <label for="kb">Size limit (KB)</label>
+      <input id="kb" type="text" inputmode="numeric" value="100">
+    </div>
+    <button class="btn ghost" id="save">Save settings</button>
+  </div>
+</details>
+
+<script>
+const $=id=>document.getElementById(id);
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+$('to').value=store.get('to')||'';
+$('kb').value=store.get('kb')||'100';
+if(!$('to').value) $('settings').open=true;
+let blob=null;
+
+$('save').onclick=()=>{store.set('to',$('to').value.trim());store.set('kb',$('kb').value.trim()||'100');$('settings').open=false;};
+$('shoot').onclick=()=>$('cam').click();
+
+const toBlob=(cv,q)=>new Promise(r=>cv.toBlob(r,'image/jpeg',q));
+
+async function compress(file,limit){
+  const bmp=await createImageBitmap(file,{imageOrientation:'from-image'});
+  let scale=Math.min(1,1600/Math.max(bmp.width,bmp.height));
+  for(let round=0;round<12;round++){
+    const w=Math.round(bmp.width*scale),h=Math.round(bmp.height*scale);
+    const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+    const g=cv.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,w,h);g.drawImage(bmp,0,0,w,h);
+    let lo=0.3,hi=0.92,best=null;
+    const top=await toBlob(cv,hi);
+    if(top.size<=limit) return {blob:top,w,h,q:hi};
+    for(let i=0;i<7;i++){
+      const mid=(lo+hi)/2,b=await toBlob(cv,mid);
+      if(b.size<=limit){best={blob:b,w,h,q:mid};lo=mid}else hi=mid;
+    }
+    if(best) return best;
+    scale*=0.85;
+  }
+  throw new Error('Could not reach the size limit');
+}
+
+$('cam').onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const stat=$('stat'); stat.className=''; stat.textContent='Compressing…';
+  $('send').disabled=true;
+  try{
+    const limit=(parseInt($('kb').value,10)||100)*1000;
+    const r=await compress(f,limit);
+    blob=r.blob;
+    const url=URL.createObjectURL(blob);
+    const p=$('preview');p.src=url;p.style.display='block';
+    stat.className='ok';
+    stat.textContent=`${(f.size/1024).toFixed(0)} KB → ${(blob.size/1024).toFixed(1)} KB · ${r.w}×${r.h}px`;
+    $('send').disabled=false;
+  }catch(err){
+    stat.className='bad';stat.textContent='Compression failed: '+err.message;
+  }
+  e.target.value='';
+};
+
+function fname(){
+  const t=$('tag').value.trim().replace(/[^\w\- ]+/g,'').replace(/\s+/g,'-')||'jewelry';
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  return `${t}_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.jpg`;
+}
+
+$('send').onclick=async()=>{
+  if(!blob) return;
+  const to=($('to').value||'').trim();
+  if(!to){$('settings').open=true;$('stat').className='bad';$('stat').textContent='Add your office email in Settings first.';return;}
+  const name=fname();
+  const file=new File([blob],name,{type:'image/jpeg'});
+  const subject='Jewelry photo'+($('tag').value.trim()?' - '+$('tag').value.trim():'');
+  try{await navigator.clipboard.writeText(to);}catch(e){}
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+    try{await navigator.share({files:[file],title:subject,text:subject});}
+    catch(e){if(e.name!=='AbortError'){$('stat').className='bad';$('stat').textContent='Share failed: '+e.message;}}
+  }else{
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();
+    $('stat').className='bad';$('stat').textContent='Sharing not supported here. The photo was downloaded instead.';
+  }
+};
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
